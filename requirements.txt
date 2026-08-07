@@ -1,0 +1,5 @@
+MetaTrader5
+opencv-python
+numpy
+mss
+pytesseract
