@@ -25,19 +25,28 @@ class Strategy:
 
     def tp2_closed(self, signal):
 
+        # TP2 must have been submitted previously.
+        # If it was never submitted, it cannot be "closed".
+        if 2 not in self.tm.submitted_limit:
+            return False
+
+        # TP2 position still open
         positions = self.tm.get_positions()
 
         for pos in positions:
 
             comment = pos.comment.upper()
 
-            if "TP2" not in comment:
-                continue
+            if "TP2" in comment:
+                return False
 
-            # Position still open
+        # TP2 may still be waiting as a pending LIMIT order
+        if self.tm.limit_order_exists(2):
             return False
 
-        # No TP2 position exists anymore
+        # TP2 was submitted previously, but now there is
+        # neither an open position nor a pending order.
+        # Therefore TP2 has been closed/removed.
         return True
 
     # --------------------------------------------------
