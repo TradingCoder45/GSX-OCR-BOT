@@ -239,7 +239,7 @@ class TradeManager:
         
         
     # ==================================================
-    # Execute ONE Limit Order
+    # Execute ONE Limit Strategy Order
     # ==================================================
 
     def place_limit_order(
@@ -257,20 +257,94 @@ class TradeManager:
         direction = signal["Signal"]
         entry = signal["Entry"]
         lot = self.normalize_lot(LOT / 4)
-        info = mt5.symbol_info(self.symbol)
-        point = info.point
-        min_distance = info.trade_stops_level * point
-        
+
+        # --------------------------------------------------
+        # CASE 1:
+        # Price has already moved favorably.
+        #
+        # BUY  -> current Ask < Entry
+        # SELL -> current Bid > Entry
+        #
+        # Execute immediately at market price.
+        # IMPORTANT:
+        # This is still a LIMIT strategy order:
+        # MAGIC_LIMIT + LIMIT TP comment.
+        # --------------------------------------------------
+
         if direction == "BUY":
 
             current = tick.ask
 
-            # Already below entry?
-            # Don't place a limit anymore.
             if current <= entry:
-                return False
 
-            # Too close to entry?
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": self.symbol,
+                    "volume": lot,
+                    "type": mt5.ORDER_TYPE_BUY,
+                    "price": current,
+                    "deviation": SLIPPAGE,
+                    "magic": MAGIC_LIMIT,
+                    "comment": f"LIMIT TP{tp_index}",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                }
+
+                result = mt5.order_send(request)
+
+                if result.retcode != mt5.TRADE_RETCODE_DONE:
+
+                    log(
+                        f"LIMIT TP{tp_index} market execution "
+                        f"failed ({result.retcode})"
+                    )
+
+                    return False
+
+                log(
+                    f"LIMIT TP{tp_index} executed at market "
+                    f"@ {current:.3f}"
+                )
+
+                # Find the newly opened position and apply
+                # the ORIGINAL signal SL and TP.
+                time.sleep(0.2)
+
+                positions = self.get_positions()
+
+                for position in positions:
+
+                    if (
+                        position.magic == MAGIC_LIMIT
+                        and position.type == mt5.POSITION_TYPE_BUY
+                        and position.comment == f"LIMIT TP{tp_index}"
+                    ):
+
+                        self.move_sl(
+                            position.ticket,
+                            signal["StopLoss"]
+                        )
+
+                        self.move_tp(
+                            position.ticket,
+                            tp
+                        )
+
+                        break
+
+                return True
+
+            # --------------------------------------------------
+            # CASE 2:
+            # BUY price is still above Entry.
+            #
+            # Place normal BUY LIMIT at original Entry.
+            # --------------------------------------------------
+
+            info = mt5.symbol_info(self.symbol)
+            point = info.point
+            min_distance = info.trade_stops_level * point
+
             if (current - entry) < min_distance:
                 return False
 
@@ -281,15 +355,85 @@ class TradeManager:
             current = tick.bid
 
             if current >= entry:
-                return False
+
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": self.symbol,
+                    "volume": lot,
+                    "type": mt5.ORDER_TYPE_SELL,
+                    "price": current,
+                    "deviation": SLIPPAGE,
+                    "magic": MAGIC_LIMIT,
+                    "comment": f"LIMIT TP{tp_index}",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                }
+
+                result = mt5.order_send(request)
+
+                if result.retcode != mt5.TRADE_RETCODE_DONE:
+
+                    log(
+                        f"LIMIT TP{tp_index} market execution "
+                        f"failed ({result.retcode})"
+                    )
+
+                    return False
+
+                log(
+                    f"LIMIT TP{tp_index} executed at market "
+                    f"@ {current:.3f}"
+                )
+
+                # Find the newly opened position and apply
+                # the ORIGINAL signal SL and TP.
+                time.sleep(0.2)
+
+                positions = self.get_positions()
+
+                for position in positions:
+
+                    if (
+                        position.magic == MAGIC_LIMIT
+                        and position.type == mt5.POSITION_TYPE_SELL
+                        and position.comment == f"LIMIT TP{tp_index}"
+                    ):
+
+                        self.move_sl(
+                            position.ticket,
+                            signal["StopLoss"]
+                        )
+
+                        self.move_tp(
+                            position.ticket,
+                            tp
+                        )
+
+                        break
+
+                return True
+
+            # --------------------------------------------------
+            # CASE 2:
+            # SELL price is still below Entry.
+            #
+            # Place normal SELL LIMIT at original Entry.
+            # --------------------------------------------------
+
+            info = mt5.symbol_info(self.symbol)
+            point = info.point
+            min_distance = info.trade_stops_level * point
 
             if (entry - current) < min_distance:
                 return False
 
             order_type = mt5.ORDER_TYPE_SELL_LIMIT
-            
-        request = {
 
+        # --------------------------------------------------
+        # Normal LIMIT pending order
+        # --------------------------------------------------
+
+        request = {
             "action": mt5.TRADE_ACTION_PENDING,
             "symbol": self.symbol,
             "volume": lot,
@@ -302,13 +446,16 @@ class TradeManager:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_RETURN,
         }
-        
+
         result = mt5.order_send(request)
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
 
             if result.retcode != 10015:
-                log(f"LIMIT TP{tp_index} failed ({result.retcode})")
+                log(
+                    f"LIMIT TP{tp_index} failed "
+                    f"({result.retcode})"
+                )
 
             return False
 
