@@ -1,27 +1,46 @@
 //+------------------------------------------------------------------+
-//|                                                  OCR_Report.mq5  |
-//|         Daily report grouped by opening comment                  |
+//|                                             Daily Report.mq5     |
+//|             OCR Bot Daily Report grouped by comment             |
 //+------------------------------------------------------------------+
 #property strict
 #property script_show_inputs
 
+//===================================================================
+// INPUTS
+//===================================================================
+
 input bool TodayOnly = true;
-input long MAGIC_ME = 100100;
+
+// Allowed magic numbers
+input long MAGIC_ME    = 100100;
 input long MAGIC_LIMIT = 100200;
-//===============================================================
-// Structure holding statistics for one bot/comment
-//===============================================================
+
+// Breakeven tolerance in account currency
+// Any net result between -BETolerance and +BETolerance = BE
+input double BETolerance = 1;
+
+
+//===================================================================
+// STRUCTURE HOLDING STATISTICS FOR ONE BOT / COMMENT
+//===================================================================
+
 struct SBotStats
 {
    string comment;
 
    int trades;
    int wins;
+   int breakeven;
    int losses;
 
    double grossProfit;
    double grossLoss;
    double netProfit;
+
+
+   //===============================================================
+   // Reset
+   //===============================================================
 
    void Reset()
    {
@@ -29,6 +48,7 @@ struct SBotStats
 
       trades=0;
       wins=0;
+      breakeven=0;
       losses=0;
 
       grossProfit=0;
@@ -36,13 +56,27 @@ struct SBotStats
       netProfit=0;
    }
 
+
+   //===============================================================
+   // Win Rate
+   //
+   // BE trades are NOT included in the denominator.
+   //===============================================================
+
    double WinRate() const
    {
-      if(trades==0)
+      int decisiveTrades=wins+losses;
+
+      if(decisiveTrades==0)
          return 0.0;
 
-      return 100.0*wins/trades;
+      return 100.0*wins/decisiveTrades;
    }
+
+
+   //===============================================================
+   // Average Win
+   //===============================================================
 
    double AvgWin() const
    {
@@ -52,6 +86,11 @@ struct SBotStats
       return grossProfit/wins;
    }
 
+
+   //===============================================================
+   // Average Loss
+   //===============================================================
+
    double AvgLoss() const
    {
       if(losses==0)
@@ -59,6 +98,11 @@ struct SBotStats
 
       return grossLoss/losses;
    }
+
+
+   //===============================================================
+   // Profit Factor
+   //===============================================================
 
    double ProfitFactor() const
    {
@@ -69,14 +113,18 @@ struct SBotStats
    }
 };
 
-//===============================================================
-// Global array of statistics
-//===============================================================
+
+//===================================================================
+// GLOBAL ARRAY
+//===================================================================
+
 SBotStats Stats[];
 
-//===============================================================
-// Find opening comment and magic number for a position
-//===============================================================
+
+//===================================================================
+// FIND OPENING COMMENT AND MAGIC NUMBER FOR A POSITION
+//===================================================================
+
 bool GetOpenInfo(const ulong positionID,
                  string &openComment,
                  long &openMagic)
@@ -90,9 +138,15 @@ bool GetOpenInfo(const ulong positionID,
       if(deal==0)
          continue;
 
-      if((ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID)
-         != positionID)
+
+      if((ulong)HistoryDealGetInteger(
+            deal,
+            DEAL_POSITION_ID
+         ) != positionID)
+      {
          continue;
+      }
+
 
       ENUM_DEAL_ENTRY entry=
          (ENUM_DEAL_ENTRY)HistoryDealGetInteger(
@@ -100,13 +154,20 @@ bool GetOpenInfo(const ulong positionID,
             DEAL_ENTRY
          );
 
+
       if(entry==DEAL_ENTRY_IN)
       {
          openComment=
-            HistoryDealGetString(deal,DEAL_COMMENT);
+            HistoryDealGetString(
+               deal,
+               DEAL_COMMENT
+            );
 
          openMagic=
-            HistoryDealGetInteger(deal,DEAL_MAGIC);
+            HistoryDealGetInteger(
+               deal,
+               DEAL_MAGIC
+            );
 
          return true;
       }
@@ -115,9 +176,11 @@ bool GetOpenInfo(const ulong positionID,
    return false;
 }
 
-//===============================================================
-// Find statistics index by comment
-//===============================================================
+
+//===================================================================
+// FIND STATISTICS INDEX BY COMMENT
+//===================================================================
+
 int FindComment(const string comment)
 {
    for(int i=0;i<ArraySize(Stats);i++)
@@ -129,9 +192,11 @@ int FindComment(const string comment)
    return -1;
 }
 
-//===============================================================
-// Create new statistics record
-//===============================================================
+
+//===================================================================
+// CREATE NEW STATISTICS RECORD
+//===================================================================
+
 int AddComment(const string comment)
 {
    int size=ArraySize(Stats);
@@ -144,9 +209,11 @@ int AddComment(const string comment)
    return size;
 }
 
-//===============================================================
-// Get existing statistics or create one
-//===============================================================
+
+//===================================================================
+// GET EXISTING STATISTICS OR CREATE ONE
+//===================================================================
+
 int GetCommentIndex(const string comment)
 {
    int idx=FindComment(comment);
@@ -157,53 +224,96 @@ int GetCommentIndex(const string comment)
    return AddComment(comment);
 }
 
-//===============================================================
-// Add one closed trade to statistics
-//===============================================================
+
+//===================================================================
+// ADD ONE CLOSED TRADE TO STATISTICS
+//===================================================================
+
 void AddTrade(const string comment,
               const double netProfit)
 {
    int idx=GetCommentIndex(comment);
 
    Stats[idx].trades++;
+
    Stats[idx].netProfit+=netProfit;
 
-   if(netProfit>=0)
+
+   //===============================================================
+   // WIN
+   //===============================================================
+
+   if(netProfit > BETolerance)
    {
       Stats[idx].wins++;
+
       Stats[idx].grossProfit+=netProfit;
    }
-   else
+
+
+   //===============================================================
+   // LOSS
+   //===============================================================
+
+   else if(netProfit < -BETolerance)
    {
       Stats[idx].losses++;
+
       Stats[idx].grossLoss+=netProfit;
+   }
+
+
+   //===============================================================
+   // BREAKEVEN
+   //===============================================================
+
+   else
+   {
+      Stats[idx].breakeven++;
    }
 }
 
-//===============================================================
-// Check whether a magic number is allowed
-//===============================================================
+
+//===================================================================
+// CHECK WHETHER MAGIC NUMBER IS ALLOWED
+//===================================================================
+
 bool IsAllowedMagic(const long magic)
 {
-   if(magic == MAGIC_ME)
+   if(magic==MAGIC_ME)
       return true;
 
-   if(magic == MAGIC_LIMIT)
+   if(magic==MAGIC_LIMIT)
       return true;
 
    return false;
 }
 
-//===============================================================
-// Script entry
-//===============================================================
+
+//===================================================================
+// SCRIPT ENTRY
+//===================================================================
+
 void OnStart()
 {
-   datetime from,to;
+   datetime from;
+   datetime to;
+
+
+   //===============================================================
+   // SELECT HISTORY
+   //===============================================================
 
    if(TodayOnly)
    {
-      from=StringToTime(TimeToString(TimeCurrent(),TIME_DATE));
+      from=
+         StringToTime(
+            TimeToString(
+               TimeCurrent(),
+               TIME_DATE
+            )
+         );
+
       to=TimeCurrent();
    }
    else
@@ -212,19 +322,23 @@ void OnStart()
       to=TimeCurrent();
    }
 
+
    if(!HistorySelect(from,to))
    {
       Print("HistorySelect failed.");
       return;
    }
 
+
    int totalDeals=HistoryDealsTotal();
 
    Print("Deals selected: ",totalDeals);
 
-   //===========================================================
-   // Scan today's closed trades
-   //===========================================================
+
+   //===============================================================
+   // SCAN CLOSED TRADES
+   //===============================================================
+
    for(int i=0;i<totalDeals;i++)
    {
       ulong deal=HistoryDealGetTicket(i);
@@ -232,229 +346,512 @@ void OnStart()
       if(deal==0)
          continue;
 
-      ENUM_DEAL_ENTRY entry=
-         (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY);
 
+      ENUM_DEAL_ENTRY entry=
+         (ENUM_DEAL_ENTRY)HistoryDealGetInteger(
+            deal,
+            DEAL_ENTRY
+         );
+
+
+      // Only closing deals
       if(entry!=DEAL_ENTRY_OUT)
          continue;
 
+
       ulong positionID=
-         (ulong)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+         (ulong)HistoryDealGetInteger(
+            deal,
+            DEAL_POSITION_ID
+         );
+
 
       string openComment="";
       long openMagic=0;
-      
-      //-----------------------------------------------------------
-      // Find the original opening deal
-      //-----------------------------------------------------------
-      if(!GetOpenInfo(positionID,openComment,openMagic))
+
+
+      //============================================================
+      // FIND ORIGINAL OPENING DEAL
+      //============================================================
+
+      if(!GetOpenInfo(
+            positionID,
+            openComment,
+            openMagic
+         ))
+      {
          continue;
-      
-      //-----------------------------------------------------------
+      }
+
+
+      //============================================================
       // MAGIC FILTER
-      //-----------------------------------------------------------
-      // Ignore the position completely if its opening magic
-      // number is not one of our allowed OCR magic numbers.
-      //-----------------------------------------------------------
+      //
+      // Only positions opened with MAGIC_ME or MAGIC_LIMIT
+      // are included.
+      //============================================================
+
       if(!IsAllowedMagic(openMagic))
          continue;
-      
-      //-----------------------------------------------------------
-      // Ignore positions without a proper OCR comment
-      //-----------------------------------------------------------
+
+
+      //============================================================
+      // REQUIRE OPENING COMMENT
+      //============================================================
+
       if(openComment=="")
          continue;
-      
-      //-----------------------------------------------------------
-      // Calculate net result of closing deal
-      //-----------------------------------------------------------
+
+
+      //============================================================
+      // GET CLOSING DEAL RESULT
+      //============================================================
+
       double profit=
-         HistoryDealGetDouble(deal,DEAL_PROFIT);
-      
+         HistoryDealGetDouble(
+            deal,
+            DEAL_PROFIT
+         );
+
+
       double commission=
-         HistoryDealGetDouble(deal,DEAL_COMMISSION);
-      
+         HistoryDealGetDouble(
+            deal,
+            DEAL_COMMISSION
+         );
+
+
       double swap=
-         HistoryDealGetDouble(deal,DEAL_SWAP);
-      
-      double net=profit+commission+swap;
-      
-      AddTrade(openComment,net);
+         HistoryDealGetDouble(
+            deal,
+            DEAL_SWAP
+         );
+
+
+      double net=
+         profit+
+         commission+
+         swap;
+
+
+      //============================================================
+      // ADD TO GROUP
+      //============================================================
+
+      AddTrade(
+         openComment,
+         net
+      );
    }
 
-   Print("Groups found: ",ArraySize(Stats));
 
-   // ===== Part 2 starts here =====
-      //===========================================================
-   // Sort by comment (OCR TP1, OCR TP2, ...)
-   //===========================================================
-   int groups = ArraySize(Stats);
+   Print(
+      "Groups found: ",
+      ArraySize(Stats)
+   );
 
-   for(int i=0; i<groups-1; i++)
+
+   //===============================================================
+   // SORT BY COMMENT
+   //===============================================================
+
+   int groups=ArraySize(Stats);
+
+
+   for(int i=0;i<groups-1;i++)
    {
-      for(int j=i+1; j<groups; j++)
+      for(int j=i+1;j<groups;j++)
       {
-         if(StringCompare(Stats[i].comment, Stats[j].comment) > 0)
+         if(
+            StringCompare(
+               Stats[i].comment,
+               Stats[j].comment
+            ) > 0
+         )
          {
-            SBotStats tmp = Stats[i];
-            Stats[i] = Stats[j];
-            Stats[j] = tmp;
+            SBotStats tmp=Stats[i];
+
+            Stats[i]=Stats[j];
+
+            Stats[j]=tmp;
          }
       }
    }
 
-   //===========================================================
-   // Create CSV
-   //===========================================================
-   
-   // Create file name: OCR_Report-DD-MM-YYYY.csv
+
+   //===============================================================
+   // CREATE FILE NAME
+   //
+   // Example:
+   // OCR_Report-05-08-2026.csv
+   //===============================================================
+
    MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   
-   string fileName = StringFormat(
-      "OCR_Report-%02d-%02d-%04d.csv",
-      dt.day,
-      dt.mon,
-      dt.year
+
+   TimeToStruct(
+      TimeCurrent(),
+      dt
    );
 
-   int file = FileOpen(fileName,
-                       FILE_WRITE|FILE_CSV|FILE_ANSI);
 
-   if(file == INVALID_HANDLE)
+   string fileName=
+      StringFormat(
+         "OCR_Report-%02d-%02d-%04d.csv",
+         dt.day,
+         dt.mon,
+         dt.year
+      );
+
+
+   //===============================================================
+   // OPEN CSV
+   //===============================================================
+
+   int file=
+      FileOpen(
+         fileName,
+         FILE_WRITE|
+         FILE_CSV|
+         FILE_ANSI
+      );
+
+
+   if(file==INVALID_HANDLE)
    {
-      Print("Cannot create ", fileName);
+      Print(
+         "Cannot create ",
+         fileName
+      );
+
       return;
    }
 
-   FileWrite(file,
-             "Comment",
-             "Trades",
-             "Wins",
-             "Losses",
-             "Win %",
-             "Gross Profit",
-             "Gross Loss",
-             "Net Profit",
-             "Average Win",
-             "Average Loss",
-             "Profit Factor");
 
-   double totalGrossProfit = 0;
-   double totalGrossLoss   = 0;
-   double totalNetProfit   = 0;
+   //===============================================================
+   // CSV HEADER
+   //===============================================================
 
-   int totalTrades = 0;
-   int totalWins   = 0;
-   int totalLosses = 0;
+   FileWrite(
+      file,
+      "Comment",
+      "Trades",
+      "Wins",
+      "BE",
+      "Losses",
+      "Win %",
+      "Gross Profit",
+      "Gross Loss",
+      "Net Profit",
+      "Average Win",
+      "Average Loss",
+      "Profit Factor"
+   );
 
-   //===========================================================
-   // Write one row per bot
-   //===========================================================
+
+   //===============================================================
+   // TOTALS
+   //===============================================================
+
+   double totalGrossProfit=0;
+   double totalGrossLoss=0;
+   double totalNetProfit=0;
+
+   int totalTrades=0;
+   int totalWins=0;
+   int totalBE=0;
+   int totalLosses=0;
+
+
+   //===============================================================
+   // WRITE ONE ROW PER COMMENT
+   //===============================================================
+
    for(int i=0;i<groups;i++)
    {
-      FileWrite(file,
-                Stats[i].comment,
-                Stats[i].trades,
-                Stats[i].wins,
-                Stats[i].losses,
-                DoubleToString(Stats[i].WinRate(),2),
-                DoubleToString(Stats[i].grossProfit,2),
-                DoubleToString(Stats[i].grossLoss,2),
-                DoubleToString(Stats[i].netProfit,2),
-                DoubleToString(Stats[i].AvgWin(),2),
-                DoubleToString(Stats[i].AvgLoss(),2),
-                DoubleToString(Stats[i].ProfitFactor(),2));
+      FileWrite(
+         file,
 
-      totalTrades      += Stats[i].trades;
-      totalWins        += Stats[i].wins;
-      totalLosses      += Stats[i].losses;
-      totalGrossProfit += Stats[i].grossProfit;
-      totalGrossLoss   += Stats[i].grossLoss;
-      totalNetProfit   += Stats[i].netProfit;
+         Stats[i].comment,
+
+         Stats[i].trades,
+
+         Stats[i].wins,
+
+         Stats[i].breakeven,
+
+         Stats[i].losses,
+
+         DoubleToString(
+            Stats[i].WinRate(),
+            2
+         ),
+
+         DoubleToString(
+            Stats[i].grossProfit,
+            2
+         ),
+
+         DoubleToString(
+            Stats[i].grossLoss,
+            2
+         ),
+
+         DoubleToString(
+            Stats[i].netProfit,
+            2
+         ),
+
+         DoubleToString(
+            Stats[i].AvgWin(),
+            2
+         ),
+
+         DoubleToString(
+            Stats[i].AvgLoss(),
+            2
+         ),
+
+         DoubleToString(
+            Stats[i].ProfitFactor(),
+            2
+         )
+      );
+
+
+      totalTrades+=Stats[i].trades;
+      totalWins+=Stats[i].wins;
+      totalBE+=Stats[i].breakeven;
+      totalLosses+=Stats[i].losses;
+
+      totalGrossProfit+=Stats[i].grossProfit;
+      totalGrossLoss+=Stats[i].grossLoss;
+      totalNetProfit+=Stats[i].netProfit;
    }
 
-   //===========================================================
-   // Totals row
-   //===========================================================
-   double totalWinRate = 0.0;
-   if(totalTrades > 0)
-      totalWinRate = 100.0 * totalWins / totalTrades;
 
-   double totalAvgWin = 0.0;
-   if(totalWins > 0)
-      totalAvgWin = totalGrossProfit / totalWins;
+   //===============================================================
+   // TOTAL STATISTICS
+   //===============================================================
 
-   double totalAvgLoss = 0.0;
-   if(totalLosses > 0)
-      totalAvgLoss = totalGrossLoss / totalLosses;
+   int totalDecisive=
+      totalWins+
+      totalLosses;
 
-   double totalPF = 0.0;
-   if(totalGrossLoss != 0.0)
-      totalPF = totalGrossProfit / MathAbs(totalGrossLoss);
 
-   FileWrite(file,
-             "TOTAL",
-             totalTrades,
-             totalWins,
-             totalLosses,
-             DoubleToString(totalWinRate,2),
-             DoubleToString(totalGrossProfit,2),
-             DoubleToString(totalGrossLoss,2),
-             DoubleToString(totalNetProfit,2),
-             DoubleToString(totalAvgWin,2),
-             DoubleToString(totalAvgLoss,2),
-             DoubleToString(totalPF,2));
+   double totalWinRate=0.0;
+
+   if(totalDecisive>0)
+   {
+      totalWinRate=
+         100.0*
+         totalWins/
+         totalDecisive;
+   }
+
+
+   double totalAvgWin=0.0;
+
+   if(totalWins>0)
+   {
+      totalAvgWin=
+         totalGrossProfit/
+         totalWins;
+   }
+
+
+   double totalAvgLoss=0.0;
+
+   if(totalLosses>0)
+   {
+      totalAvgLoss=
+         totalGrossLoss/
+         totalLosses;
+   }
+
+
+   double totalPF=0.0;
+
+   if(totalGrossLoss!=0.0)
+   {
+      totalPF=
+         totalGrossProfit/
+         MathAbs(totalGrossLoss);
+   }
+
+
+   //===============================================================
+   // TOTAL CSV ROW
+   //===============================================================
+
+   FileWrite(
+      file,
+
+      "TOTAL",
+
+      totalTrades,
+
+      totalWins,
+
+      totalBE,
+
+      totalLosses,
+
+      DoubleToString(
+         totalWinRate,
+         2
+      ),
+
+      DoubleToString(
+         totalGrossProfit,
+         2
+      ),
+
+      DoubleToString(
+         totalGrossLoss,
+         2
+      ),
+
+      DoubleToString(
+         totalNetProfit,
+         2
+      ),
+
+      DoubleToString(
+         totalAvgWin,
+         2
+      ),
+
+      DoubleToString(
+         totalAvgLoss,
+         2
+      ),
+
+      DoubleToString(
+         totalPF,
+         2
+      )
+   );
+
+
+   //===============================================================
+   // CLOSE CSV
+   //===============================================================
 
    FileClose(file);
 
-   //===========================================================
-   // Print summary to Experts tab
-   //===========================================================
-   Print("");
-   Print("===============================================================");
-   Print("                 OCR BOT DAILY REPORT");
-   Print("===============================================================");
 
-   PrintFormat("%-15s %6s %6s %6s %8s %12s %12s %12s",
-               "Comment",
-               "Trades",
-               "Wins",
-               "Loss",
-               "Win%",
-               "Gross+",
-               "Gross-",
-               "Net");
+   //===============================================================
+   // PRINT REPORT TO EXPERTS
+   //===============================================================
+
+   Print("");
+
+   Print(
+      "================================================================"
+   );
+
+   Print(
+      "                     OCR BOT DAILY REPORT"
+   );
+
+   Print(
+      "================================================================"
+   );
+
+
+   PrintFormat(
+      "%-15s %6s %6s %6s %7s %8s %12s %12s %12s",
+
+      "Comment",
+      "Trades",
+      "Wins",
+      "BE",
+      "Losses",
+      "Win%",
+      "Gross+",
+      "Gross-",
+      "Net"
+   );
+
+
+   //===============================================================
+   // PRINT GROUPS
+   //===============================================================
 
    for(int i=0;i<groups;i++)
    {
-      PrintFormat("%-15s %6d %6d %6d %7.2f%% %12.2f %12.2f %12.2f",
-                  Stats[i].comment,
-                  Stats[i].trades,
-                  Stats[i].wins,
-                  Stats[i].losses,
-                  Stats[i].WinRate(),
-                  Stats[i].grossProfit,
-                  Stats[i].grossLoss,
-                  Stats[i].netProfit);
+      PrintFormat(
+         "%-15s %6d %6d %6d %7d %7.2f%% %12.2f %12.2f %12.2f",
+
+         Stats[i].comment,
+
+         Stats[i].trades,
+
+         Stats[i].wins,
+
+         Stats[i].breakeven,
+
+         Stats[i].losses,
+
+         Stats[i].WinRate(),
+
+         Stats[i].grossProfit,
+
+         Stats[i].grossLoss,
+
+         Stats[i].netProfit
+      );
    }
 
-   Print("---------------------------------------------------------------");
 
-   PrintFormat("%-15s %6d %6d %6d %7.2f%% %12.2f %12.2f %12.2f",
-               "TOTAL",
-               totalTrades,
-               totalWins,
-               totalLosses,
-               totalWinRate,
-               totalGrossProfit,
-               totalGrossLoss,
-               totalNetProfit);
+   //===============================================================
+   // TOTAL LINE
+   //===============================================================
 
-   Print("===============================================================");
+   Print(
+      "----------------------------------------------------------------"
+   );
+
+
+   PrintFormat(
+      "%-15s %6d %6d %6d %7d %7.2f%% %12.2f %12.2f %12.2f",
+
+      "TOTAL",
+
+      totalTrades,
+
+      totalWins,
+
+      totalBE,
+
+      totalLosses,
+
+      totalWinRate,
+
+      totalGrossProfit,
+
+      totalGrossLoss,
+
+      totalNetProfit
+   );
+
+
+   Print(
+      "================================================================"
+   );
+
+
+   //===============================================================
+   // REPORT INFORMATION
+   //===============================================================
+
+   Print("BE tolerance: ", DoubleToString(BETolerance, 2));
+
+   Print("Allowed Magic #1: ", MAGIC_ME);
+
+   Print("Allowed Magic #2: ", MAGIC_LIMIT);
+
    Print("CSV exported to:");
-   Print(TerminalInfoString(TERMINAL_DATA_PATH) +
-         "\\MQL5\\Files\\" + fileName);
+
+   Print(TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + fileName);
 }
-
-
