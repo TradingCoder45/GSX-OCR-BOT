@@ -647,19 +647,19 @@ class TradeManager:
             # Market Execution
             # -------------------------
 
-            if i not in self.submitted_me:
+            # if i not in self.submitted_me:
 
-                result = self.place_market_order(signal, i, tp)
+                # result = self.place_market_order(signal, i, tp)
 
-                if result is True:
+                # if result is True:
 
-                    self.submitted_me.add(i)
-                    log(f"ME TP{i} submitted")
+                    # self.submitted_me.add(i)
+                    # log(f"ME TP{i} submitted")
 
-                elif result == "SKIPPED":
+                # elif result == "SKIPPED":
 
-                    self.submitted_me.add(i)
-                    log(f"ME TP{i} skipped")
+                    # self.submitted_me.add(i)
+                    # log(f"ME TP{i} skipped")
 
             # -------------------------
             # Limit Orders
