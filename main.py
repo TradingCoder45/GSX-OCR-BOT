@@ -1,27 +1,3 @@
-# import time
-
-# from trade_manager import TradeManager
-# from strategy import Strategy
-# from ocr import read_signal
-# from console import log
-
-
-# tm = TradeManager()
-
-# strategy = Strategy(tm)
-
-# print("\n" * 30)
-
-# while True:
-
-    # signal = read_signal() 
-
-    # if signal:
-
-        # strategy.process(signal)
-
-    # time.sleep(0.5)
-
 import time
 
 from trade_manager import TradeManager
@@ -39,12 +15,24 @@ try:
 
     while True:
 
+        t0 = time.perf_counter()
+
         signal = read_signal()
+        
+        t1 = time.perf_counter()
 
         if signal is not None:
             strategy.process(signal)
+        
+        t2 = time.perf_counter()
 
-        time.sleep(0.5)
+        print(
+            f"OCR: {(t1-t0)*1000:.1f} ms | "
+            f"Strategy: {(t2-t1)*1000:.1f} ms | "
+            f"Total: {(t2-t0)*1000:.1f} ms"
+        )
+        
+        time.sleep(0.1)
 
 except KeyboardInterrupt:
 
