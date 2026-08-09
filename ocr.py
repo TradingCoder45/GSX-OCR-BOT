@@ -112,15 +112,26 @@ def preprocess(img):
     )
 
     return gray
-
+ 
 # --------------------------------------------------
 # Measure search-box image difference
 # --------------------------------------------------
-    
+
 def measure_image_difference(current_box, previous_box):
 
     if previous_box is None:
         return True
+
+    # --------------------------------------------------
+    # Box dimensions changed
+    # --------------------------------------------------
+
+    if current_box.shape != previous_box.shape:
+        return True
+
+    # --------------------------------------------------
+    # Compare images
+    # --------------------------------------------------
 
     diff = cv2.absdiff(current_box, previous_box)
     gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
@@ -433,8 +444,8 @@ def read_signal():
         and _last_valid_box is not None
     ):
 
-        if DEBUG:
-            log("[IMAGE DIFF] No change + previous valid signal -> skipping OCR")
+        # if DEBUG:
+            # log("[IMAGE DIFF] No change + previous valid signal -> skipping OCR")
 
         return _last_valid_signal.copy()
 
