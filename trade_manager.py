@@ -1,6 +1,7 @@
 import MetaTrader5 as mt5
 import time
 
+from console import log
 from config import (
     SYMBOL,
     LOT,
@@ -8,9 +9,6 @@ from config import (
     MAGIC_ME,
     MAGIC_LIMIT,
 )
-
-from console import log
-
 
 class TradeManager:
 
@@ -818,3 +816,126 @@ class TradeManager:
 
                     self.submitted_limit.add(i)
                     log(f"LIMIT TP{i} submitted")
+                    
+    # --------------------------------------------------
+    # Close all positions and cancel all pending orders
+    # --------------------------------------------------
+
+    def close_all_and_cancel_orders(self):
+
+        success = True
+
+        # --------------------------------------------------
+        # Close open positions
+        # --------------------------------------------------
+
+        positions = self.get_positions()
+
+        for pos in positions:
+
+            tick = mt5.symbol_info_tick(pos.symbol)
+
+            if tick is None:
+                log(f"[DAILY CLOSE] No tick for {pos.symbol}")
+                success = False
+                continue
+
+            if pos.type == mt5.POSITION_TYPE_BUY:
+                order_type = mt5.ORDER_TYPE_SELL
+                price = tick.bid
+            else:
+                order_type = mt5.ORDER_TYPE_BUY
+                price = tick.ask
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": pos.symbol,
+                "volume": pos.volume,
+                "type": order_type,
+                "position": pos.ticket,
+                "price": price,
+                "deviation": SLIPPAGE,
+                "magic": pos.magic,
+                "comment": "Daily Close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+
+            result = mt5.order_send(request)
+
+            if result is None:
+                log(
+                    f"[DAILY CLOSE] Failed position "
+                    f"{pos.ticket}: no result"
+                )
+                success = False
+                continue
+
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                log(
+                    f"[DAILY CLOSE] Failed position "
+                    f"{pos.ticket}: "
+                    f"{result.retcode} "
+                    f"{result.comment}"
+                )
+                success = False
+            else:
+                log(
+                    f"[DAILY CLOSE] Closed position "
+                    f"{pos.ticket}"
+                )
+
+        # --------------------------------------------------
+        # Cancel pending orders
+        # --------------------------------------------------
+
+        orders = mt5.orders_get()
+        # orders = self.submitted_limit
+
+        if orders is None:
+            error = mt5.last_error()
+
+            if error[0] != 0:
+                log(
+                    f"[DAILY CLOSE] orders_get failed: "
+                    f"{error}"
+                )
+                success = False
+
+            orders = []
+
+        for order in orders:
+
+            request = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": order.ticket,
+                "symbol": order.symbol,
+                "magic": order.magic,
+                "comment": "Daily Close",
+            }
+
+            result = mt5.order_send(request)
+
+            if result is None:
+                log(
+                    f"[DAILY CLOSE] Failed cancel "
+                    f"order {order.ticket}: no result"
+                )
+                success = False
+                continue
+
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                log(
+                    f"[DAILY CLOSE] Failed cancel "
+                    f"order {order.ticket}: "
+                    f"{result.retcode} "
+                    f"{result.comment}"
+                )
+                success = False
+            else:
+                log(
+                    f"[DAILY CLOSE] Cancelled order "
+                    f"{order.ticket}"
+                )
+
+        return success

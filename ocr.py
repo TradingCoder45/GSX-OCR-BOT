@@ -8,8 +8,8 @@ import pytesseract
 
 from mss.exception import ScreenShotError
 
-from config import SEARCH_BOX, FIELDS, DEBUG, DEBUG_IMAGES
-from console import update_status
+from config import SEARCH_BOX, FIELDS, DEBUG, DEBUG_IMAGES, DEBUG_TIMING
+from console import log, update_status
 
 # --------------------------------------------------
 # Image difference variables
@@ -79,7 +79,7 @@ def find_indicator_box(img):
             best = (x, y, w, h)
             best_area = area
 
-    if DEBUG:
+    if DEBUG_TIMING:
         print(f"[OCR TIME] find_indicator_box: {_ms(t0):.1f} ms")
 
     return best
@@ -126,9 +126,6 @@ def measure_image_difference(current_box, previous_box):
     gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
 
     mean_diff = float(np.mean(gray_diff))
-
-    if DEBUG:
-        print(f"[IMAGE DIFF] Mean: {mean_diff:.3f}")
 
     return mean_diff > IMAGE_DIFF_MEAN_THRESHOLD
     
@@ -211,7 +208,7 @@ def combined_price_ocr(preprocessed_fields):
         if m:
             values[field] = float(m.group())
 
-    if DEBUG:
+    if DEBUG_TIMING:
         print(
             f"[OCR TIME] Combined prices: "
             f"{elapsed:.1f} ms"
@@ -294,7 +291,7 @@ def combined_text_ocr(preprocessed_fields):
         elif "WAITING" in line:
             state = "WAITING"
 
-    if DEBUG:
+    if DEBUG_TIMING:
         print(
             f"[OCR TIME] Combined text: "
             f"{elapsed:.1f} ms"
@@ -341,22 +338,26 @@ def validate_signal(data):
     ]
         
     if not all(field in data for field in price_fields):
-        print("Fields Count Not Valid")
+        if DEBUG:
+            log("Fields Count Not Valid")
         return False
 
     entry = data["Entry"]
     for field in price_fields[1:]:
 
         if abs(data[field] - entry) > 30:
-            print("Prices Diff > 30")
+            if DEBUG:
+                log("Prices Diff > 30")
             return False
 
     if data.get("Signal") not in ("BUY", "SELL"):
-        print("Signal Not Valid")
+        if DEBUG:
+            log("Signal Not Valid")
         return False
 
     if data.get("State") not in ("RUNNING", "WAITING"):
-        print("State Not Valid")
+        if DEBUG:
+            log("State Not Valid")
         return False
 
     return True
@@ -387,7 +388,8 @@ def read_signal():
             cv2.imwrite("debug/search_box.png", search)
             
     except ScreenShotError as e:
-        log(f"Screenshot failed: {e}")
+        if DEBUG:
+            log(f"Screenshot failed: {e}")
         return None
     
     search = cv2.cvtColor(search, cv2.COLOR_BGRA2BGR)
@@ -395,7 +397,8 @@ def read_signal():
     rect = find_indicator_box(search)
 
     if rect is None:
-        print("Indicator box not found.")
+        if DEBUG:
+            log("Indicator box not found.")
         return None
 
     x, y, w, h = rect
@@ -431,7 +434,7 @@ def read_signal():
     ):
 
         if DEBUG:
-            print("[IMAGE DIFF] No change + previous valid signal -> skipping OCR")
+            log("[IMAGE DIFF] No change + previous valid signal -> skipping OCR")
 
         return _last_valid_signal.copy()
 
@@ -482,12 +485,10 @@ def read_signal():
 
     if not valid:
         _last_ocr_valid = False
-
         return None
 
     if not is_complete_signal(data):
         _last_ocr_valid = False
-
         return None
 
     _last_valid_signal = data.copy()

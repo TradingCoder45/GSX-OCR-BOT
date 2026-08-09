@@ -1,5 +1,48 @@
 from console import log, log_signal
+from datetime import datetime, time
+from config import DEBUG
+from config import (
+    TRADING_START_TIME,
+    DAILY_CLOSE_TIME,
+)
 
+def _handle_daily_close(self):
+
+    today = datetime.now().date()
+
+    # Already handled today's shutdown
+    if self.daily_close_date == today:
+        return True
+
+    log(
+        "[SESSION] 23:55 reached -> "
+        "closing all positions and cancelling "
+        "all pending orders"
+    )
+
+    success = self.tm.close_all_and_cancel_orders()
+
+    if success:
+        self.daily_close_date = today
+
+        # Prevent anything from the previous
+        # trading session from being reused.
+        self.executed_signal = None
+        self.last_state = None
+        self.be_moved_for_signal = None
+
+        log(
+            "[SESSION] Daily shutdown completed"
+        )
+
+    else:
+        log(
+            "[SESSION] Daily shutdown incomplete "
+            "-> will retry"
+        )
+
+    return success
+    
 class Strategy:
 
     def __init__(self, trade_manager):
@@ -8,6 +51,7 @@ class Strategy:
         self.executed_signal = None
         self.last_state = None
         self.be_moved_for_signal = None
+        self.daily_close_date = None
 
     # --------------------------------------------------
 
@@ -52,6 +96,35 @@ class Strategy:
     # --------------------------------------------------
 
     def process(self, signal):
+        
+        session = self._trading_session_status()
+
+        # --------------------------------------------------
+        # Daily shutdown
+        # --------------------------------------------------
+
+        if session == "DAILY_CLOSE":
+
+            self._handle_daily_close()
+
+            return
+
+        # --------------------------------------------------
+        # Before trading session
+        # --------------------------------------------------
+
+        if session == "BEFORE_SESSION":
+
+            log(
+                "[SESSION] Before 01:10 -> "
+                "signals rejected"
+            )
+
+            return
+
+        # --------------------------------------------------
+        # Normal trading session
+        # --------------------------------------------------
 
         state = signal["State"]
         # log(f"STATE={state} | LAST_STATE={self.last_state}")
@@ -160,3 +233,39 @@ class Strategy:
 
         self.executed_signal = signature
         self.be_moved_for_signal = None
+        
+    # --------------------------------------------------
+    # Trading session
+    # --------------------------------------------------
+
+    def _parse_time(self, value):
+
+        hour, minute = map(
+            int,
+            value.split(":")
+        )
+
+        return time(hour, minute)
+
+
+    def _trading_session_status(self):
+
+        now = datetime.now()
+
+        current_time = now.time()
+
+        start_time = self._parse_time(
+            TRADING_START_TIME
+        )
+
+        close_time = self._parse_time(
+            DAILY_CLOSE_TIME
+        )
+
+        if current_time < start_time:
+            return "BEFORE_SESSION"
+
+        if current_time >= close_time:
+            return "DAILY_CLOSE"
+
+        return "TRADING"

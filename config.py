@@ -42,8 +42,18 @@ FIELDS = {
     "State":     (73, 218, 117, 26),
 }
 
+# ----------------------------
+# Trading session times
+# ----------------------------
+
+TRADING_START_TIME = "01:10"
+DAILY_CLOSE_TIME = "23:55"
+
+# ----------------------------
+
 DEBUG = True
 DEBUG_IMAGES = True
+DEBUG_TIMING = False
 
 # ----------------------------
 

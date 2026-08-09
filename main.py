@@ -5,6 +5,7 @@ from strategy import Strategy
 from ocr import read_signal
 
 from console import start, stop
+from config import DEBUG_TIMING
 
 tm = TradeManager()
 strategy = Strategy(tm)
@@ -26,11 +27,12 @@ try:
         
         t2 = time.perf_counter()
 
-        print(
-            f"OCR: {(t1-t0)*1000:.1f} ms | "
-            f"Strategy: {(t2-t1)*1000:.1f} ms | "
-            f"Total: {(t2-t0)*1000:.1f} ms"
-        )
+        if DEBUG_TIMING:
+            print(
+                f"OCR: {(t1-t0)*1000:.1f} ms | "
+                f"Strategy: {(t2-t1)*1000:.1f} ms | "
+                f"Total: {(t2-t0)*1000:.1f} ms"
+            )
         
         time.sleep(0.1)
 
