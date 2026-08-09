@@ -52,7 +52,7 @@ DAILY_CLOSE_TIME = "23:55"
 # ----------------------------
 
 DEBUG = True
-DEBUG_IMAGES = True
+DEBUG_IMAGES = False
 DEBUG_TIMING = False
 
 # ----------------------------
