@@ -12,10 +12,9 @@ from config import SEARCH_BOX, FIELDS, DEBUG, DEBUG_IMAGES
 from console import update_status
 
 # --------------------------------------------------
-# Image difference test
+# Image difference variables
 # --------------------------------------------------
 IMAGE_DIFF_MEAN_THRESHOLD = 0.1
-IMAGE_DIFF_CHANGED_THRESHOLD = 0.1
 
 _last_valid_box = None
 _last_ocr_valid = False
@@ -31,9 +30,16 @@ CLAHE = cv2.createCLAHE(
     tileGridSize=(8, 8),
 )
 
+# --------------------------------------------------
+# Measure Time Elapsed in ms
+# --------------------------------------------------
+
 def _ms(start):
     return (time.perf_counter() - start) * 1000
 
+# --------------------------------------------------
+# Find Indicator Box
+# --------------------------------------------------
 
 def find_indicator_box(img):
 
@@ -77,7 +83,11 @@ def find_indicator_box(img):
         print(f"[OCR TIME] find_indicator_box: {_ms(t0):.1f} ms")
 
     return best
-    
+
+# --------------------------------------------------
+# Preprocess Image
+# --------------------------------------------------
+  
 def preprocess(img):
 
     img = cv2.resize(
@@ -103,7 +113,6 @@ def preprocess(img):
 
     return gray
 
-
 # --------------------------------------------------
 # Measure search-box image difference
 # --------------------------------------------------
@@ -123,6 +132,9 @@ def measure_image_difference(current_box, previous_box):
 
     return mean_diff > IMAGE_DIFF_MEAN_THRESHOLD
     
+# --------------------------------------------------
+# Prices OCR
+# --------------------------------------------------
 
 def combined_price_ocr(preprocessed_fields):
 
@@ -207,6 +219,9 @@ def combined_price_ocr(preprocessed_fields):
 
     return values
 
+# --------------------------------------------------
+# Text OCR
+# --------------------------------------------------
 
 def combined_text_ocr(preprocessed_fields):
 
@@ -286,7 +301,11 @@ def combined_text_ocr(preprocessed_fields):
         )
 
     return signal, state
-    
+
+# --------------------------------------------------
+# Signal Fields Count Check
+# --------------------------------------------------
+  
 def is_complete_signal(data):
 
     required_fields = [
@@ -304,20 +323,10 @@ def is_complete_signal(data):
         data.get(field) is not None
         for field in required_fields
     )
-    
-def ocr_text(img, config):
 
-    txt = pytesseract.image_to_string(
-        img,
-        config=config,
-    )
-
-    txt = txt.replace(",", ".")
-    txt = txt.replace("|", "I")
-    txt = txt.replace("O", "0")
-    txt = txt.replace("o", "0")
-
-    return txt.strip()
+# --------------------------------------------------
+# Valid Signal Check
+# --------------------------------------------------
 
 def validate_signal(data):
     """Validate OCR output."""
@@ -338,8 +347,8 @@ def validate_signal(data):
     entry = data["Entry"]
     for field in price_fields[1:]:
 
-        if abs(data[field] - entry) > 300:
-            print("Prices Diff > 300")
+        if abs(data[field] - entry) > 30:
+            print("Prices Diff > 30")
             return False
 
     if data.get("Signal") not in ("BUY", "SELL"):
@@ -352,6 +361,9 @@ def validate_signal(data):
 
     return True
 
+# --------------------------------------------------
+# Red Signal
+# --------------------------------------------------
 
 def read_signal():
     """
@@ -373,6 +385,7 @@ def read_signal():
         
         if DEBUG_IMAGES:
             cv2.imwrite("debug/search_box.png", search)
+            
     except ScreenShotError as e:
         log(f"Screenshot failed: {e}")
         return None
@@ -436,27 +449,6 @@ def read_signal():
         if DEBUG_IMAGES:
             cv2.imwrite(f"debug/{field}.png", proc)
 
-        # -------------------------
-        # Signal
-        # -------------------------
-
-        if field == "Signal":
-            continue
-
-        # -------------------------
-        # State
-        # -------------------------
-
-        if field == "State":
-            continue
-
-        # -------------------------
-        # BestPnL
-        # -------------------------
-
-        if field == "BestPnL":
-            continue
-
     signal, state = combined_text_ocr(preprocessed_fields)
 
     if signal is not None:
@@ -491,16 +483,10 @@ def read_signal():
     if not valid:
         _last_ocr_valid = False
 
-        if DEBUG:
-            print("[OCR] Invalid signal -> OCR will continue")
-
         return None
 
     if not is_complete_signal(data):
         _last_ocr_valid = False
-
-        if DEBUG:
-            print("[OCR] Incomplete signal -> OCR will continue")
 
         return None
 
@@ -509,3 +495,5 @@ def read_signal():
     _last_ocr_valid = True
 
     return data
+    
+# --------------------------------------------------
