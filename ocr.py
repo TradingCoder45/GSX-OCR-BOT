@@ -1,6 +1,6 @@
 import os
 import re
-
+import time
 import cv2
 import mss
 import numpy as np
@@ -11,19 +11,33 @@ from mss.exception import ScreenShotError
 from config import SEARCH_BOX, FIELDS, DEBUG, DEBUG_IMAGES
 from console import update_status
 
+# --------------------------------------------------
+# Image difference test
+# --------------------------------------------------
+IMAGE_DIFF_MEAN_THRESHOLD = 0.1
+IMAGE_DIFF_CHANGED_THRESHOLD = 0.1
+
+_last_valid_box = None
+_last_ocr_valid = False
+IMAGE_DIFF_DEBUG = True
+
 os.makedirs("debug", exist_ok=True)
 sct = mss.mss()
 _last_signal = None
+_last_valid_signal = None
+
+CLAHE = cv2.createCLAHE(
+    clipLimit=2.5,
+    tileGridSize=(8, 8),
+)
+
+def _ms(start):
+    return (time.perf_counter() - start) * 1000
+
 
 def find_indicator_box(img):
-    """
-    Detect the GSX indicator box by its cyan/green border.
 
-    Returns
-    -------
-    (x, y, w, h) relative to img
-    or None.
-    """
+    t0 = time.perf_counter()
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
@@ -47,14 +61,11 @@ def find_indicator_box(img):
     for cnt in contours:
 
         x, y, w, h = cv2.boundingRect(cnt)
-
         area = w * h
 
-        # Reject tiny contours
         if area < 10000:
             continue
 
-        # Box height is fairly constant
         if h < 180:
             continue
 
@@ -62,10 +73,12 @@ def find_indicator_box(img):
             best = (x, y, w, h)
             best_area = area
 
+    if DEBUG:
+        print(f"[OCR TIME] find_indicator_box: {_ms(t0):.1f} ms")
+
     return best
     
 def preprocess(img):
-    """Prepare image for OCR."""
 
     img = cv2.resize(
         img,
@@ -77,25 +90,222 @@ def preprocess(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    clahe = cv2.createCLAHE(
-        clipLimit=2.5,
-        tileGridSize=(8, 8),
-    )
+    gray = CLAHE.apply(gray)
 
-    gray = clahe.apply(gray)
     gray = cv2.bitwise_not(gray)
+
     _, gray = cv2.threshold(
         gray,
-        120,                 # Threshold
-        255,                # Value assigned to pixels above threshold
+        120,
+        255,
         cv2.THRESH_BINARY,
     )
 
     return gray
+
+
+# --------------------------------------------------
+# Measure search-box image difference
+# --------------------------------------------------
+    
+def measure_image_difference(current_box, previous_box):
+
+    if previous_box is None:
+        return True
+
+    diff = cv2.absdiff(current_box, previous_box)
+    gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+
+    mean_diff = float(np.mean(gray_diff))
+
+    if DEBUG:
+        print(f"[IMAGE DIFF] Mean: {mean_diff:.3f}")
+
+    return mean_diff > IMAGE_DIFF_MEAN_THRESHOLD
     
 
+def combined_price_ocr(preprocessed_fields):
+
+    t0 = time.perf_counter()
+
+    price_fields = [
+        "Entry",
+        "StopLoss",
+        "TP1",
+        "TP2",
+        "TP3",
+        "TP4",
+    ]
+
+    images = [
+        preprocessed_fields[field]
+        for field in price_fields
+    ]
+
+    gap = 20
+
+    width = max(img.shape[1] for img in images)
+
+    height = sum(img.shape[0] for img in images)
+    height += gap * (len(images) - 1)
+
+    combined = np.zeros(
+        (height, width),
+        dtype=np.uint8,
+    )
+
+    y = 0
+
+    for img in images:
+
+        h, w = img.shape
+
+        combined[y:y+h, :w] = img
+
+        y += h + gap
+
+    config = (
+        "--oem 1 --psm 6 "
+        "-c tessedit_char_whitelist=0123456789."
+    )
+
+    text = pytesseract.image_to_string(
+        combined,
+        config=config,
+    )
+
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    values = {}
+
+    for field, line in zip(price_fields, lines):
+
+        line = line.replace(",", ".")
+        line = line.replace("|", "I")
+        line = line.replace("O", "0")
+        line = line.replace("o", "0")
+
+        m = re.search(
+            r"\d+\.\d+",
+            line,
+        )
+
+        if m:
+            values[field] = float(m.group())
+
+    if DEBUG:
+        print(
+            f"[OCR TIME] Combined prices: "
+            f"{elapsed:.1f} ms"
+        )
+
+    return values
+
+
+def combined_text_ocr(preprocessed_fields):
+
+    t0 = time.perf_counter()
+
+    text_fields = [
+        "Signal",
+        "State",
+    ]
+
+    images = [
+        preprocessed_fields[field]
+        for field in text_fields
+    ]
+
+    gap = 20
+
+    width = max(img.shape[1] for img in images)
+
+    height = sum(img.shape[0] for img in images)
+    height += gap * (len(images) - 1)
+
+    combined = np.zeros(
+        (height, width),
+        dtype=np.uint8,
+    )
+
+    y = 0
+
+    for img in images:
+
+        h, w = img.shape
+
+        combined[y:y+h, :w] = img
+
+        y += h + gap
+
+    config = (
+        "--oem 1 --psm 6 "
+        "-c tessedit_char_whitelist=ABEGILNRSTUWY"
+    )
+
+    text = pytesseract.image_to_string(
+        combined,
+        config=config,
+    )
+
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    lines = [
+        line.strip().upper()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    signal = None
+    state = None
+
+    for line in lines:
+
+        if "BUY" in line:
+            signal = "BUY"
+
+        elif "SELL" in line:
+            signal = "SELL"
+
+        elif "RUNNING" in line:
+            state = "RUNNING"
+
+        elif "WAITING" in line:
+            state = "WAITING"
+
+    if DEBUG:
+        print(
+            f"[OCR TIME] Combined text: "
+            f"{elapsed:.1f} ms"
+        )
+
+    return signal, state
+    
+def is_complete_signal(data):
+
+    required_fields = [
+        "Signal",
+        "Entry",
+        "StopLoss",
+        "TP1",
+        "TP2",
+        "TP3",
+        "TP4",
+        "State",
+    ]
+
+    return all(
+        data.get(field) is not None
+        for field in required_fields
+    )
+    
 def ocr_text(img, config):
-    """OCR helper."""
 
     txt = pytesseract.image_to_string(
         img,
@@ -109,7 +319,6 @@ def ocr_text(img, config):
 
     return txt.strip()
 
-
 def validate_signal(data):
     """Validate OCR output."""
 
@@ -121,22 +330,6 @@ def validate_signal(data):
         "TP3",
         "TP4",
     ]
-
-    # if DEBUG:
-        # print("-" * 30)
-        # for field in [
-            # "Signal",
-            # "Entry",
-            # "StopLoss",
-            # "TP1",
-            # "TP2",
-            # "TP3",
-            # "TP4",
-            # "BestPnL",
-            # "State",
-        # ]:
-            # print(f"{field:<10}: {data.get(field, '<missing>')}")
-        # print("-" * 30)
         
     if not all(field in data for field in price_fields):
         print("Fields Count Not Valid")
@@ -153,7 +346,7 @@ def validate_signal(data):
         print("Signal Not Valid")
         return False
 
-    if data.get("State") not in ("RUNNING", "WAITING", "CLOSED"):
+    if data.get("State") not in ("RUNNING", "WAITING"):
         print("State Not Valid")
         return False
 
@@ -173,10 +366,13 @@ def read_signal():
         If OCR is invalid
     """
 
-    # search = np.array(sct.grab(SEARCH_BOX))
+    global _last_valid_signal, _last_valid_box, _last_ocr_valid
     
     try:
         search = np.array(sct.grab(SEARCH_BOX))
+        
+        if DEBUG_IMAGES:
+            cv2.imwrite("debug/search_box.png", search)
     except ScreenShotError as e:
         log(f"Screenshot failed: {e}")
         return None
@@ -192,17 +388,50 @@ def read_signal():
     x, y, w, h = rect
 
     box = search[y:y+h, x:x+w]
-
+    
     if DEBUG_IMAGES:
-        cv2.imwrite("debug/full_box.png", box)
+        cv2.imwrite("debug/full_box.png", box)  
+        
+    # --------------------------------------------------
+    # Image difference check
+    # --------------------------------------------------
+
+    image_changed = measure_image_difference(
+        box,
+        _last_valid_box
+    )
+
+    # --------------------------------------------------
+    # Skip OCR only when:
+    #
+    # 1. Previous OCR result was valid
+    # 2. Previous valid signal exists
+    # 3. Previous valid box exists
+    # 4. Current box has not changed
+    # --------------------------------------------------
+
+    if (
+        not image_changed
+        and _last_ocr_valid
+        and _last_valid_signal is not None
+        and _last_valid_box is not None
+    ):
+
+        if DEBUG:
+            print("[IMAGE DIFF] No change + previous valid signal -> skipping OCR")
+
+        return _last_valid_signal.copy()
 
     data = {}
-
+    preprocessed_fields = {}
+    
     for field, (x, y, w, h) in FIELDS.items():
 
+        field_start = time.perf_counter()
+        
         crop = box[y:y+h, x:x+w]
-
         proc = preprocess(crop)
+        preprocessed_fields[field] = proc
 
         if DEBUG_IMAGES:
             cv2.imwrite(f"debug/{field}.png", proc)
@@ -212,46 +441,6 @@ def read_signal():
         # -------------------------
 
         if field == "Signal":
-
-            global _last_signal
-
-            # txt = ocr_text(
-                # proc,
-                # "--oem 1 --psm 7"
-            # ).upper()
-            
-            txt = pytesseract.image_to_string(
-                proc,
-                config="--oem 3 --psm 7 "
-            ).upper()
-
-            txt = " ".join(txt.split())
-            
-            # if DEBUG:
-                # print(f"{field} OCR: {repr(txt)}")
-
-            # Common OCR fixes
-            txt = txt.replace("5ELL", "SELL")
-            txt = txt.replace("SELI", "SELL")
-            txt = txt.replace("SELLL", "SELL")
-            txt = txt.replace("$ELL", "SELL")
-            txt = txt.replace("8UY", "BUY")
-
-            if "BUY" in txt:
-                data[field] = "BUY"
-                _last_signal = "BUY"
-
-            elif "SELL" in txt or "ELL" in txt:
-                data[field] = "SELL"
-                _last_signal = "SELL"
-
-            else:
-                # OCR occasionally misses the signal completely.
-                # Reuse the previous one instead of invalidating
-                # the whole reading.
-                if _last_signal is not None:
-                    data[field] = _last_signal
-
             continue
 
         # -------------------------
@@ -259,21 +448,6 @@ def read_signal():
         # -------------------------
 
         if field == "State":
-
-            txt = ocr_text(
-                proc,
-                "--oem 1 --psm 7 "
-                "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            ).upper()
-
-            m = re.search(
-                r"RUNNING|WAITING|CLOSED",
-                txt,
-            )
-
-            if m:
-                data[field] = m.group()
-
             continue
 
         # -------------------------
@@ -281,54 +455,57 @@ def read_signal():
         # -------------------------
 
         if field == "BestPnL":
-
-            txt = ocr_text(
-                proc,
-                "--oem 1 --psm 7 "
-                "-c tessedit_char_whitelist=0123456789.+-$",
-            )
-
-            m = re.search(
-                r"[-+]?\d+\.\d+",
-                txt,
-            )
-
-            if m:
-                data[field] = float(m.group())
-
             continue
 
-        # -------------------------
-        # Prices
-        # -------------------------
+    signal, state = combined_text_ocr(preprocessed_fields)
+
+    if signal is not None:
+        data["Signal"] = signal
+
+    if state is not None:
+        data["State"] = state
+
+    # --------------------------------------------------
+    # Combined price OCR
+    # --------------------------------------------------
+
+    combined_prices = combined_price_ocr(preprocessed_fields)
+
+    for field in (
+        "Entry",
+        "StopLoss",
+        "TP1",
+        "TP2",
+        "TP3",
+        "TP4",
+    ):
+
+        value = combined_prices.get(field)
+
+        if value is not None:
+            data[field] = value
         
-        txt = ocr_text(
-            proc,
-            "--oem 1 --psm 7 "
-            "-c tessedit_char_whitelist=0123456789.",
-        )
-
-        m = re.search(
-            r"\d+\.\d+",
-            txt,
-        )
-
-        if m:
-            data[field] = float(m.group())
-            
-
-    # if validate_signal(data):
-        # print("VALID")
-        # return data
-
-    # print("INVALID")
-    # return None
-    
     valid = validate_signal(data)
-
     update_status(data, valid)
 
-    if valid:
-        return data
+    if not valid:
+        _last_ocr_valid = False
 
-    return None
+        if DEBUG:
+            print("[OCR] Invalid signal -> OCR will continue")
+
+        return None
+
+    if not is_complete_signal(data):
+        _last_ocr_valid = False
+
+        if DEBUG:
+            print("[OCR] Incomplete signal -> OCR will continue")
+
+        return None
+
+    _last_valid_signal = data.copy()
+    _last_valid_box = box.copy()
+    _last_ocr_valid = True
+
+    return data

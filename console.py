@@ -92,7 +92,7 @@ def log_signal(signal, reason):
             "TP2",
             "TP3",
             "TP4",
-            "BestPnL",
+            # "BestPnL",
             "State",
         ]
 
@@ -149,7 +149,7 @@ def build_layout():
         "TP2",
         "TP3",
         "TP4",
-        "BestPnL",
+        # "BestPnL",
         "State",
     ]
 

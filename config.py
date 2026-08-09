@@ -24,10 +24,10 @@ BOX = {
 }
 
 SEARCH_BOX = {
-    "left": 850,
-    "top": 250,
-    "width": 500,
-    "height": 500,
+    "left": 1015,
+    "top": 375,
+    "width": 250,
+    "height": 300,
 }
 
 FIELDS = {
@@ -38,12 +38,12 @@ FIELDS = {
     "TP2":       (73, 110, 117, 26),
     "TP3":       (73, 137, 117, 26),
     "TP4":       (73, 164, 117, 26),
-    "BestPnL":   (73, 191, 117, 26),
+    # "BestPnL":   (73, 191, 117, 26),
     "State":     (73, 218, 117, 26),
 }
 
 DEBUG = True
-DEBUG_IMAGES = False
+DEBUG_IMAGES = True
 
 # ----------------------------
 
