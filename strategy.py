@@ -6,43 +6,6 @@ from config import (
     DAILY_CLOSE_TIME,
 )
 
-def _handle_daily_close(self):
-
-    today = datetime.now().date()
-
-    # Already handled today's shutdown
-    if self.daily_close_date == today:
-        return True
-
-    log(
-        "[SESSION] 23:55 reached -> "
-        "closing all positions and cancelling "
-        "all pending orders"
-    )
-
-    success = self.tm.close_all_and_cancel_orders()
-
-    if success:
-        self.daily_close_date = today
-
-        # Prevent anything from the previous
-        # trading session from being reused.
-        self.executed_signal = None
-        self.last_state = None
-        self.be_moved_for_signal = None
-
-        log(
-            "[SESSION] Daily shutdown completed"
-        )
-
-    else:
-        log(
-            "[SESSION] Daily shutdown incomplete "
-            "-> will retry"
-        )
-
-    return success
-    
 class Strategy:
 
     def __init__(self, trade_manager):
@@ -52,9 +15,49 @@ class Strategy:
         self.last_state = None
         self.be_moved_for_signal = None
         self.daily_close_date = None
+        self.before_session_logged = False
 
     # --------------------------------------------------
+    
+    def _handle_daily_close(self):
 
+        today = datetime.now().date()
+
+        # Already handled today's shutdown
+        if self.daily_close_date == today:
+            return True
+
+        log(
+            "[SESSION] 23:55 reached -> "
+            "closing all positions and cancelling "
+            "all pending orders"
+        )
+
+        success = self.tm.close_all_and_cancel_orders()
+
+        if success:
+            self.daily_close_date = today
+
+            # Prevent anything from the previous
+            # trading session from being reused.
+            self.executed_signal = None
+            self.last_state = None
+            self.be_moved_for_signal = None
+
+            log(
+                "[SESSION] Daily shutdown completed"
+            )
+
+        else:
+            log(
+                "[SESSION] Daily shutdown incomplete "
+                "-> will retry"
+            )
+
+        return success
+    
+    # --------------------------------------------------
+    
     def make_signature(self, signal):
 
         return (
@@ -69,9 +72,12 @@ class Strategy:
 
     def tp2_closed(self, signal):
 
-        # TP2 must have been submitted previously.
-        # If it was never submitted, it cannot be "closed".
-        if 2 not in self.tm.submitted_limit:
+        # TP2 must have been submitted previously
+        # by either Market Execution or LIMIT.
+        if (
+            2 not in self.tm.submitted_limit
+            and 2 not in self.tm.submitted_me
+        ):
             return False
 
         # TP2 position still open
@@ -94,6 +100,42 @@ class Strategy:
         return True
 
     # --------------------------------------------------
+    
+    # --------------------------------------------------
+    # Trading session
+    # --------------------------------------------------
+
+    def _parse_time(self, value):
+
+        hour, minute = map(
+            int,
+            value.split(":")
+        )
+
+        return time(hour, minute)
+
+
+    def _trading_session_status(self):
+
+        now = datetime.now()
+
+        current_time = now.time()
+
+        start_time = self._parse_time(
+            TRADING_START_TIME
+        )
+
+        close_time = self._parse_time(
+            DAILY_CLOSE_TIME
+        )
+
+        if current_time < start_time:
+            return "BEFORE_SESSION"
+
+        if current_time >= close_time:
+            return "DAILY_CLOSE"
+
+        return "TRADING"
 
     def process(self, signal):
         
@@ -115,17 +157,23 @@ class Strategy:
 
         if session == "BEFORE_SESSION":
 
-            log(
-                "[SESSION] Before 01:10 -> "
-                "signals rejected"
-            )
+            if not self.before_session_logged:
+
+                log(
+                    "[SESSION] Before 01:10 -> "
+                    "signals rejected"
+                )
+
+                self.before_session_logged = True
 
             return
 
         # --------------------------------------------------
         # Normal trading session
         # --------------------------------------------------
-
+        
+        self.before_session_logged = False
+        
         state = signal["State"]
         # log(f"STATE={state} | LAST_STATE={self.last_state}")
         if state != self.last_state:
@@ -157,15 +205,15 @@ class Strategy:
 
             self.last_state = "WAITING"
             return
-    
+        
         # --------------------------------------------------
-        # CLOSED
+        # RUNNING
         # --------------------------------------------------
 
-        if state == "CLOSED":
-            return
-            
-        # We are RUNNING
+        if self.last_state != "RUNNING":
+
+            log_signal(signal, "State -> RUNNING")
+
         self.last_state = "RUNNING"
 
         # --------------------------------------------------
@@ -234,38 +282,3 @@ class Strategy:
         self.executed_signal = signature
         self.be_moved_for_signal = None
         
-    # --------------------------------------------------
-    # Trading session
-    # --------------------------------------------------
-
-    def _parse_time(self, value):
-
-        hour, minute = map(
-            int,
-            value.split(":")
-        )
-
-        return time(hour, minute)
-
-
-    def _trading_session_status(self):
-
-        now = datetime.now()
-
-        current_time = now.time()
-
-        start_time = self._parse_time(
-            TRADING_START_TIME
-        )
-
-        close_time = self._parse_time(
-            DAILY_CLOSE_TIME
-        )
-
-        if current_time < start_time:
-            return "BEFORE_SESSION"
-
-        if current_time >= close_time:
-            return "DAILY_CLOSE"
-
-        return "TRADING"

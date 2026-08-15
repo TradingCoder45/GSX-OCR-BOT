@@ -356,9 +356,9 @@ def validate_signal(data):
     entry = data["Entry"]
     for field in price_fields[1:]:
 
-        if abs(data[field] - entry) > 30:
+        if abs(data[field] - entry) > 50:
             if DEBUG:
-                log("Prices Diff > 30")
+                log("Prices Diff > 50")
             return False
 
     if data.get("Signal") not in ("BUY", "SELL"):
@@ -409,8 +409,8 @@ def read_signal():
 
     if rect is None:
         if DEBUG:
-            log("Indicator box not found.")
-        return None
+            # log("Indicator box not found.")
+            return None
 
     x, y, w, h = rect
 
@@ -449,14 +449,21 @@ def read_signal():
 
         return _last_valid_signal.copy()
 
+    field_width = min(117, w - 73)
+    
     data = {}
     preprocessed_fields = {}
     
-    for field, (x, y, w, h) in FIELDS.items():
+    for field, (x, y, _, h) in FIELDS.items():
 
         field_start = time.perf_counter()
         
+        w = field_width
         crop = box[y:y+h, x:x+w]
+        
+        if crop.size == 0:
+            return None
+        
         proc = preprocess(crop)
         preprocessed_fields[field] = proc
 

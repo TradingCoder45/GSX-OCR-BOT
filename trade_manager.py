@@ -144,9 +144,11 @@ class TradeManager:
 
         tick = mt5.symbol_info_tick(self.symbol)
         info = mt5.symbol_info(self.symbol)
+
         point = info.point
         min_distance = info.trade_stops_level * point
-        SAFETY_POINTS = 20      # points
+
+        SAFETY_POINTS = 20
         safety = SAFETY_POINTS * point
         required_distance = min_distance + safety
 
@@ -154,32 +156,46 @@ class TradeManager:
             return False
 
         direction = signal["Signal"]
+        entry = signal["Entry"]
 
         lot = self.normalize_lot(LOT / 4)
 
+        # --------------------------------------------------
+        # MARKET EXECUTION ENTRY ZONE
+        # --------------------------------------------------
+
         if direction == "BUY":
+
             price = tick.ask
+
+            # Wait until price re-enters:
+            # current Ask <= Entry + 0.5
+            if price > entry + 0.5:
+                return "WAIT"
 
             if price <= signal["StopLoss"]:
                 return False
-            
-            # TP already reached?
+
+            # TP already reached / too close
             if (tp - price) < required_distance:
-                # log(f"ME TP{tp_index} skipped (TP too close)")
                 return "SKIPPED"
-                
+
             order_type = mt5.ORDER_TYPE_BUY
 
         else:
 
             price = tick.bid
 
+            # Wait until price re-enters:
+            # current Bid >= Entry - 0.5
+            if price < entry - 0.5:
+                return "WAIT"
+
             if price >= signal["StopLoss"]:
                 return False
-                
-            # TP already reached?
+
+            # TP already reached / too close
             if (price - tp) < required_distance:
-                # log(f"ME TP{tp_index} skipped (TP too close)")
                 return "SKIPPED"
 
             order_type = mt5.ORDER_TYPE_SELL
@@ -201,20 +217,20 @@ class TradeManager:
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
 
-            log(f"ME TP{tp_index} failed ({result.retcode})")
+            log(
+                f"ME TP{tp_index} failed "
+                f"({result.retcode})"
+            )
 
             return False
-        
+
         time.sleep(0.2)
+
         positions = self.get_positions()
         position = None
 
         for pos in positions:
 
-            if pos.magic not in (MAGIC_ME, MAGIC_LIMIT):
-                continue
-
-            # Find the newest matching direction/volume.
             if pos.type == (
                 mt5.POSITION_TYPE_BUY
                 if direction == "BUY"
@@ -224,15 +240,23 @@ class TradeManager:
 
         if position is not None:
 
-            self.move_sl(position.ticket, signal["StopLoss"])
-            self.move_tp(position.ticket, tp)
+            self.move_sl(
+                position.ticket,
+                signal["StopLoss"]
+            )
+
+            self.move_tp(
+                position.ticket,
+                tp
+            )
 
         else:
 
-            log(f"Couldn't locate ME TP{tp_index} to modify SL/TP.")
+            log(
+                f"Couldn't locate ME TP{tp_index} "
+                f"to modify SL/TP."
+            )
 
-        # IMPORTANT:
-        # The market order was already opened.
         return True
         
         
@@ -665,6 +689,7 @@ class TradeManager:
             comment = pos.comment.upper()
 
             if "TP3" not in comment and "TP4" not in comment:
+                log(f"TP3/4 Not in Position Comment.")
                 continue
                 
             time.sleep(0.2)
@@ -674,7 +699,7 @@ class TradeManager:
         log(f"Moved {moved} position(s) to Break Even.")
 
     # --------------------------------------------------
-    # Move TP3/TP4 to Break Even
+    # Market Position Exit
     # --------------------------------------------------
         
     def market_position_exists(self, tp_index):
@@ -776,7 +801,39 @@ class TradeManager:
         if self.cancel_limits_if_tp3_reached(signal):
 
             self.submitted_limit.update({1, 2, 3, 4})
-        
+
+        # --------------------------------------------------
+        # TP3 reached -> cancel remaining ME signal orders
+        # --------------------------------------------------
+
+        tick = mt5.symbol_info_tick(self.symbol)
+
+        if tick is not None:
+
+            direction = signal["Signal"]
+            tp3 = signal["TP3"]
+
+            if direction == "BUY":
+                tp3_reached = tick.bid >= tp3
+                current_price = tick.bid
+
+            else:
+                tp3_reached = tick.ask <= tp3
+                current_price = tick.ask
+
+            if tp3_reached:
+
+                remaining = {1, 2, 3, 4} - self.submitted_me
+
+                if remaining:
+
+                    log(
+                        f"TP3 reached ({current_price:.3f}) "
+                        f"-> cancelling remaining ME signal orders"
+                    )
+
+                    self.submitted_me.update(remaining)
+
         tps = [
             signal["TP1"],
             signal["TP2"],
@@ -792,30 +849,36 @@ class TradeManager:
             # Market Execution
             # -------------------------
 
-            # if i not in self.submitted_me:
+            if i not in self.submitted_me:
 
-                # result = self.place_market_order(signal, i, tp)
+                result = self.place_market_order(signal, i, tp)
 
-                # if result is True:
+                if result is True:
 
-                    # self.submitted_me.add(i)
-                    # log(f"ME TP{i} submitted")
+                    self.submitted_me.add(i)
+                    log(f"ME TP{i} submitted")
 
-                # elif result == "SKIPPED":
+                elif result == "SKIPPED":
 
-                    # self.submitted_me.add(i)
-                    # log(f"ME TP{i} skipped")
+                    self.submitted_me.add(i)
+                    log(f"ME TP{i} skipped")
+                    
+                elif result == "WAIT":
+
+                    # Do NOT add to submitted_me.
+                    # It will be retried on the next cycle.
+                    pass
 
             # -------------------------
             # Limit Orders
             # -------------------------
 
-            if i not in self.submitted_limit:
+            # if i not in self.submitted_limit:
 
-                if self.place_limit_order(signal, i, tp):
+                # if self.place_limit_order(signal, i, tp):
 
-                    self.submitted_limit.add(i)
-                    log(f"LIMIT TP{i} submitted")
+                    # self.submitted_limit.add(i)
+                    # log(f"LIMIT TP{i} submitted")
                     
     # --------------------------------------------------
     # Close all positions and cancel all pending orders
